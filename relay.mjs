@@ -7,7 +7,12 @@
 // streams the request/response to and from api.anthropic.com unchanged.
 // Tools still run on the laptop, so only the laptop's files are touched.
 //
+// The OAuth token is refreshed automatically shortly before it expires, and the
+// new token is written back to the PC's credentials file so Claude Code there
+// keeps working too.
+//
 // Usage: node relay.mjs [--host 0.0.0.0] [--port 8787]
+//        node relay.mjs --refresh-now   (force one token refresh and exit)
 // Zero dependencies (Node 18+).
 
 import http from 'node:http';
@@ -46,17 +51,84 @@ function loadSecret() {
 
 const SECRET = loadSecret();
 
-// Re-read on every request so refreshes done by Claude Code on this PC are picked up.
-function readAccessToken() {
-  const creds = JSON.parse(fs.readFileSync(CREDS_PATH, 'utf8')).claudeAiOauth;
-  if (!creds?.accessToken) throw new Error(`no claudeAiOauth.accessToken in ${CREDS_PATH}`);
-  if (creds.expiresAt && Date.now() > creds.expiresAt) {
-    throw new Error(
-      `OAuth token expired at ${new Date(creds.expiresAt).toLocaleString()}; ` +
-        'run `claude` on the relay PC to refresh it',
-    );
+// OAuth refresh, same endpoint and request shape Claude Code uses.
+const TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL ?? 'https://platform.claude.com/v1/oauth/token';
+const CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID ?? '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+// Refresh this long before expiry. Kept short so a Claude Code session running on
+// this PC (which refreshes earlier) usually wins and the relay just re-reads its result.
+const REFRESH_MARGIN_MS = Number(process.env.RELAY_REFRESH_MARGIN_MS ?? 2 * 60 * 1000);
+
+function readCredsFile() {
+  const file = JSON.parse(fs.readFileSync(CREDS_PATH, 'utf8'));
+  if (!file.claudeAiOauth?.accessToken) {
+    throw new Error(`no claudeAiOauth.accessToken in ${CREDS_PATH}`);
   }
-  return creds.accessToken;
+  return file;
+}
+
+// Write via temp file + rename so Claude Code never sees a half-written file.
+function writeCredsFile(file) {
+  const tmp = `${CREDS_PATH}.relay-${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(file), { mode: 0o600 });
+  fs.renameSync(tmp, CREDS_PATH);
+}
+
+const needsRefresh = creds => creds.expiresAt && Date.now() > creds.expiresAt - REFRESH_MARGIN_MS;
+
+async function refreshCreds({ force = false } = {}) {
+  // Re-read first: Claude Code on this PC may have refreshed in the meantime.
+  const creds = readCredsFile().claudeAiOauth;
+  if (!force && !needsRefresh(creds)) return creds.accessToken;
+  if (!creds.refreshToken) throw new Error('token expiring and no refresh token available');
+
+  const body = {
+    grant_type: 'refresh_token',
+    refresh_token: creds.refreshToken,
+    client_id: CLIENT_ID,
+  };
+  if (Array.isArray(creds.scopes) && creds.scopes.length) body.scope = creds.scopes.join(' ');
+
+  const r = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    // Someone else may have rotated the refresh token while we were waiting.
+    const latest = readCredsFile().claudeAiOauth;
+    if (latest.accessToken !== creds.accessToken && !needsRefresh(latest)) return latest.accessToken;
+    throw new Error(`token refresh failed (${r.status}): ${text.slice(0, 300)}`);
+  }
+
+  const data = await r.json();
+  const latest = readCredsFile();
+  latest.claudeAiOauth = {
+    ...latest.claudeAiOauth,
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token ?? creds.refreshToken,
+    expiresAt: Date.now() + data.expires_in * 1000,
+    ...(data.refresh_token_expires_in && {
+      refreshTokenExpiresAt: Date.now() + data.refresh_token_expires_in * 1000,
+    }),
+  };
+  writeCredsFile(latest);
+  console.log(
+    `Refreshed OAuth token; valid until ${new Date(latest.claudeAiOauth.expiresAt).toLocaleString()}`,
+  );
+  return data.access_token;
+}
+
+// Only one refresh at a time, even with many concurrent laptop requests.
+let refreshing = null;
+
+// Re-read on every request so refreshes done by Claude Code on this PC are picked up.
+async function getAccessToken() {
+  const creds = readCredsFile().claudeAiOauth;
+  if (!needsRefresh(creds)) return creds.accessToken;
+  refreshing ??= refreshCreds().finally(() => (refreshing = null));
+  return refreshing;
 }
 
 function safeEqual(a, b) {
@@ -75,7 +147,7 @@ const HOP_BY_HOP = new Set([
   'upgrade', 'te', 'trailer', 'authorization', 'x-api-key',
 ]);
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const started = Date.now();
   const who = req.socket.remoteAddress;
 
@@ -96,7 +168,7 @@ const server = http.createServer((req, res) => {
 
   let token;
   try {
-    token = readAccessToken();
+    token = await getAccessToken();
   } catch (e) {
     console.error(`[${who}] ${e.message}`);
     return sendError(res, 503, e.message);
@@ -132,12 +204,23 @@ const server = http.createServer((req, res) => {
   req.pipe(upstream);
 });
 
-server.listen(PORT, HOST, () => {
+// `node relay.mjs --refresh-now`: force one token refresh and exit (for testing).
+// Uses exitCode instead of process.exit(): exiting while fetch's sockets are
+// still closing trips a libuv assertion on Windows.
+if ('refresh-now' in args) {
+  try {
+    await refreshCreds({ force: true });
+  } catch (e) {
+    console.error(e.message);
+    process.exitCode = 1;
+  }
+} else server.listen(PORT, HOST, async () => {
   console.log(`Claude relay listening on http://${HOST}:${PORT}`);
   console.log(`Using credentials from ${CREDS_PATH}`);
   try {
-    readAccessToken();
-    console.log('OAuth token found and not expired.');
+    await getAccessToken();
+    const { expiresAt } = readCredsFile().claudeAiOauth;
+    console.log(`OAuth token OK; valid until ${new Date(expiresAt).toLocaleString()} (auto-refreshes).`);
   } catch (e) {
     console.warn(`Warning: ${e.message}`);
   }

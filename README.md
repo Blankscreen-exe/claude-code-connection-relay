@@ -13,7 +13,7 @@ Use Claude Code on a **laptop** with the Claude Pro/Max login of another **PC**,
 - **Only the PC runs the relay.** The laptop just needs Claude Code and a settings file.
 - **Your code stays on the laptop.** All file edits and commands run on the laptop. The PC only passes the model traffic through.
 - **The laptop never sees your OAuth token.** It only holds a relay secret, and the relay swaps that for the real token.
-- **Token refreshes are picked up automatically.** The relay re-reads the PC's credentials file on every request.
+- **The relay refreshes the token automatically.** Shortly before the OAuth token expires, the relay gets a new one and saves it back to the PC's credentials file, so you can work remotely all day while the PC sits idle. Refreshes done by Claude Code on the PC are picked up too.
 
 ---
 
@@ -93,6 +93,12 @@ It prints an address like `100.101.102.103`. For extra safety, start the relay s
 ```powershell
 node relay.mjs --host 100.101.102.103 --port 8787
 ```
+
+### 7. If you'll work away from home
+
+- Use the **Tailscale** address from step 6. It works from anywhere, and at home too, so you only configure the laptop once.
+- Set Windows **Power & Sleep → Sleep: Never** (when plugged in). A sleeping PC can't relay.
+- Leave the relay window running. If the PC restarts, start the relay again.
 
 ---
 
@@ -180,7 +186,7 @@ The Claude Code VS Code extension reads the same `~/.claude/settings.json`, so i
 | Symptom | Cause / fix |
 |---|---|
 | Laptop: `invalid relay secret` (401) | `ANTHROPIC_AUTH_TOKEN` on the laptop doesn't match `relay.secret` on the PC. Copy it again with no extra spaces or newlines. |
-| Laptop: `OAuth token expired ... run claude on the relay PC` (503) | The PC's login token expired. Run `claude` on the PC (send any message) so it refreshes. No relay restart needed. |
+| Laptop: `token refresh failed` (503) | The relay couldn't renew the login, usually because the refresh token was revoked or expired (for example after logging out). Run `claude` on the PC and log in again. No relay restart needed. You can also test a refresh with `node relay.mjs --refresh-now`. |
 | Laptop: connection refused / timeout | Relay isn't running, the IP is wrong, the firewall rule is missing, or the network is set to *Public*. Check with `curl http://<PC-IP>:8787/api/hello -I`. |
 | Laptop asks you to log in | The `env` block isn't being read. Check the path and JSON syntax of `settings.json`. |
 | `Generated new relay secret` shows up again | `relay.secret` was deleted. Copy the new secret to the laptop. |
@@ -195,6 +201,8 @@ The Claude Code VS Code extension reads the same `~/.claude/settings.json`, so i
 | `--port` / `RELAY_PORT` | `8787` | Port to listen on |
 | `RELAY_SECRET` | contents of `relay.secret` | Use this secret instead of the file |
 | `CLAUDE_CREDENTIALS` | `~/.claude/.credentials.json` | Path to the PC's Claude credentials |
+| `RELAY_REFRESH_MARGIN_MS` | `120000` (2 min) | How long before expiry the relay refreshes the token |
+| `--refresh-now` | — | Force one token refresh, save it, and exit |
 
 **Rotate the secret:** delete `relay.secret`, restart the relay, and update the laptop's `settings.json`.
 
