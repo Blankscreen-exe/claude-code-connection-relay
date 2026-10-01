@@ -1,0 +1,4 @@
+# Relay secret is a password — never commit it
+relay.secret
+node_modules/
+*.log
