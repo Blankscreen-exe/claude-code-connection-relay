@@ -156,6 +156,23 @@ claude
 
 That's it. Claude Code works as usual, editing the laptop's files while using the PC's subscription. Each request shows up as a log line in the PC's relay window.
 
+> A few features that depend on a claude.ai account login (claude.ai connectors, account and usage screens) may not work on the laptop because it isn't logged in to an account. Normal coding, tools, file edits and model selection work.
+
+### 5. VS Code (optional)
+
+The Claude Code VS Code extension reads the same `~/.claude/settings.json`, so it also goes through the relay. You don't need any extra relay setup.
+
+1. Install the **Claude Code** extension in VS Code on the laptop.
+2. If the extension shows a login screen, open VS Code **Settings** (`Ctrl+,`), search for **"Claude Code: Disable Login Prompt"** and enable it. In `settings.json` this is:
+
+   ```json
+   "claudeCode.disableLoginPrompt": true
+   ```
+
+3. Restart VS Code and open the Claude Code panel. Requests should appear in the PC's relay log.
+
+> The terminal setup is tested. VS Code should work through the same config, but if it doesn't, check that the `env` block in `~/.claude/settings.json` is correct and that the relay log shows incoming requests.
+
 ---
 
 ## Troubleshooting
@@ -185,7 +202,12 @@ That's it. Claude Code works as usual, editing the laptop's files while using th
 
 ## Security notes
 
-- The link between the laptop and the PC is **plain HTTP**. Use it only on your home LAN or over Tailscale, which is encrypted.
+Two layers protect the relay:
+
+1. **The relay secret.** This is the "API key" the laptop holds (`ANTHROPIC_AUTH_TOKEN`). Every request must carry it, and anything without it is rejected with a 401. It is **not** your real Claude token. If it leaks, rotate it (see above) and your actual login on the PC is unaffected.
+2. **The network.** The link between the laptop and the PC is **plain HTTP**, so the secret travels unencrypted. On a home LAN, another device on the same Wi-Fi could capture it. **Tailscale** encrypts all traffic between the two machines and keeps the relay unreachable from outside your tailnet. Use Tailscale (with `--host <tailscale-ip>`) whenever you're away from home or on shared Wi-Fi.
+
+Also:
 - **Never port-forward 8787 on your router** or expose the relay to the internet.
 - Use the relay only on your own devices. Sharing the secret with anyone else is sharing your account.
 - Laptop usage counts against the PC account's normal subscription limits.
