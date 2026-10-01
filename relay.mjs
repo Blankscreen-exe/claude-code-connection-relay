@@ -12,6 +12,7 @@
 // keeps working too.
 //
 // Usage: node relay.mjs [--host 0.0.0.0] [--port 8787]
+//        node relay.mjs --dashboard     (also open the live traffic window)
 //        node relay.mjs --refresh-now   (force one token refresh and exit)
 // Zero dependencies (Node 18+).
 
@@ -22,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createStats, tapUsage, startDashboard } from './dashboard.mjs';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => {
@@ -50,6 +52,9 @@ function loadSecret() {
 }
 
 const SECRET = loadSecret();
+
+const DASHBOARD_PORT = Number(args['dashboard-port'] ?? process.env.RELAY_DASHBOARD_PORT ?? 8788);
+const stats = createStats({ getTokenExpiry: () => readCredsFile().claudeAiOauth.expiresAt });
 
 // OAuth refresh, same endpoint and request shape Claude Code uses.
 const TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL ?? 'https://platform.claude.com/v1/oauth/token';
@@ -114,9 +119,9 @@ async function refreshCreds({ force = false } = {}) {
     }),
   };
   writeCredsFile(latest);
-  console.log(
-    `Refreshed OAuth token; valid until ${new Date(latest.claudeAiOauth.expiresAt).toLocaleString()}`,
-  );
+  const msg = `Refreshed OAuth token; valid until ${new Date(latest.claudeAiOauth.expiresAt).toLocaleString()}`;
+  console.log(msg);
+  stats.event(msg, 'info');
   return data.access_token;
 }
 
@@ -157,20 +162,28 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  const rec = stats.begin(who, req.method, req.url);
+
   const presented =
     req.headers.authorization?.replace(/^Bearer\s+/i, '') ?? req.headers['x-api-key'] ?? '';
   if (!safeEqual(presented, SECRET)) {
     console.warn(`[${who}] rejected ${req.method} ${req.url}: bad relay secret`);
+    stats.end(rec, 401, 'bad secret');
     return sendError(res, 401, 'invalid relay secret');
   }
 
-  if (!req.url.startsWith('/v1/')) return sendError(res, 404, `relay only forwards /v1/*`);
+  if (!req.url.startsWith('/v1/')) {
+    stats.end(rec, 404, 'not forwarded');
+    return sendError(res, 404, `relay only forwards /v1/*`);
+  }
 
   let token;
   try {
     token = await getAccessToken();
   } catch (e) {
     console.error(`[${who}] ${e.message}`);
+    stats.end(rec, 503, e.message);
+    stats.event(e.message, 'error');
     return sendError(res, 503, e.message);
   }
 
@@ -187,20 +200,27 @@ const server = http.createServer(async (req, res) => {
   const upstream = https.request(
     { host: UPSTREAM, port: 443, method: req.method, path: req.url, headers },
     up => {
+      rec.status = up.statusCode;
       res.writeHead(up.statusCode, up.headers);
+      const usageParsed = tapUsage(up, rec, stats);
       up.pipe(res);
-      up.on('end', () =>
-        console.log(`[${who}] ${req.method} ${req.url} -> ${up.statusCode} (${Date.now() - started}ms)`),
-      );
+      up.on('end', () => {
+        console.log(`[${who}] ${req.method} ${req.url} -> ${up.statusCode} (${Date.now() - started}ms)`);
+        usageParsed.then(() => stats.end(rec));
+      });
     },
   );
   upstream.on('error', e => {
     console.error(`[${who}] upstream error: ${e.message}`);
+    stats.end(rec, 502, e.message);
     if (!res.headersSent) sendError(res, 502, `upstream error: ${e.message}`);
     else res.destroy(e);
   });
   // Abort upstream if the laptop disconnects (e.g. user hits Esc mid-stream).
-  res.on('close', () => upstream.destroy());
+  res.on('close', () => {
+    upstream.destroy();
+    if (!res.writableFinished) stats.end(rec, 499, 'client closed');
+  });
   req.pipe(upstream);
 });
 
@@ -215,6 +235,7 @@ if ('refresh-now' in args) {
     process.exitCode = 1;
   }
 } else server.listen(PORT, HOST, async () => {
+  if ('dashboard' in args) startDashboard(stats, { port: DASHBOARD_PORT, open: true });
   console.log(`Claude relay listening on http://${HOST}:${PORT}`);
   console.log(`Using credentials from ${CREDS_PATH}`);
   try {

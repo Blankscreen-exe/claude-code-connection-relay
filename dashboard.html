@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Relay</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --series-1-wash: rgba(42, 120, 214, 0.10);
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --good-text: #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-1-wash: rgba(57, 135, 229, 0.12);
+      --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-1-wash: rgba(57, 135, 229, 0.12);
+    --good-text: #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .live {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--ink-2); font-size: 12px;
+  }
+  .live i {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--muted);
+  }
+  .live.on i { background: var(--good); animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  header .meta { margin-left: auto; color: var(--muted); font-size: 12px; }
+  #theme {
+    background: none; border: 1px solid var(--border); color: var(--ink-2);
+    border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; min-width: 0;
+  }
+  .card h2 {
+    font-size: 12px; font-weight: 500; color: var(--ink-2); margin: 0 0 8px;
+  }
+
+  .tiles {
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px;
+  }
+  .tile .label { color: var(--ink-2); font-size: 12px; }
+  .tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; white-space: nowrap; }
+  .tile .sub { color: var(--muted); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .charts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;
+  }
+  .chart { position: relative; height: 150px; }
+  .chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .chart text { font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .tip {
+    position: absolute; pointer-events: none; z-index: 2;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; white-space: nowrap;
+    transform: translate(-50%, calc(-100% - 8px)); display: none;
+  }
+  .tip b { font-weight: 600; }
+
+  .bottom {
+    display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); gap: 10px;
+  }
+  .side { display: grid; gap: 10px; align-content: start; }
+
+  .feed { max-height: 320px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th {
+    text-align: left; font-weight: 500; color: var(--muted); font-size: 11px;
+    padding: 4px 6px; border-bottom: 1px solid var(--grid);
+    position: sticky; top: 0; background: var(--surface);
+  }
+  td { padding: 5px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  td.dim { color: var(--ink-2); }
+  tr.new { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--series-1-wash); } }
+
+  .status { display: inline-flex; align-items: center; gap: 5px; }
+  .status i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .status.ok i { background: var(--good); }
+  .status.warn i { background: var(--warning); }
+  .status.err i { background: var(--critical); }
+  .status.live i { background: var(--series-1); animation: pulse 1s infinite; }
+  .status.idle i { background: var(--muted); }
+
+  .list { display: grid; gap: 6px; max-height: 150px; overflow: auto; }
+  .list .row { display: flex; gap: 8px; align-items: baseline; }
+  .list .row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .list .t { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+  .empty { color: var(--muted); font-size: 12px; }
+  .ico { flex: none; font-size: 11px; width: 14px; text-align: center; }
+  .ico.info { color: var(--series-1); }
+  .ico.warn { color: var(--warning); }
+  .ico.error { color: var(--critical); }
+
+  @media (max-width: 900px) {
+    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .charts, .bottom { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    body { padding: 12px 16px; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Claude Relay</h1>
+    <span class="live" id="live"><i></i><span>Connecting…</span></span>
+    <span class="meta" id="uptime"></span>
+    <button id="theme" title="Toggle light/dark">Theme</button>
+  </header>
+
+  <section class="tiles">
+    <div class="card tile"><div class="label">Requests</div><div class="value" id="t-req">0</div><div class="sub" id="t-req-sub">&nbsp;</div></div>
+    <div class="card tile"><div class="label">Input tokens</div><div class="value" id="t-in">0</div><div class="sub" id="t-in-sub">&nbsp;</div></div>
+    <div class="card tile"><div class="label">Output tokens</div><div class="value" id="t-out">0</div><div class="sub">&nbsp;</div></div>
+    <div class="card tile"><div class="label">Avg latency</div><div class="value" id="t-lat">–</div><div class="sub">full response time</div></div>
+    <div class="card tile"><div class="label">Errors</div><div class="value" id="t-err">0</div><div class="sub" id="t-err-sub">&nbsp;</div></div>
+    <div class="card tile"><div class="label">Login token</div><div class="value" id="t-exp">–</div><div class="sub" id="t-exp-sub">&nbsp;</div></div>
+  </section>
+
+  <section class="charts">
+    <div class="card"><h2>Requests per minute · last 15 min</h2><div class="chart" id="c-req"></div></div>
+    <div class="card"><h2>Tokens per minute · last 15 min</h2><div class="chart" id="c-tok"></div></div>
+  </section>
+
+  <section class="bottom">
+    <div class="card">
+      <h2>Live requests</h2>
+      <div class="feed">
+        <table>
+          <thead><tr>
+            <th>Time</th><th>Client</th><th>Model</th><th>Status</th>
+            <th class="num">Latency</th><th class="num">In</th><th class="num">Out</th>
+          </tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+        <div class="empty" id="feed-empty" style="padding:8px 6px">Waiting for requests from the laptop…</div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="card"><h2>Clients</h2><div class="list" id="clients"></div></div>
+      <div class="card"><h2>Events</h2><div class="list" id="events"></div></div>
+    </div>
+  </section>
+
+<script>
+const $ = id => document.getElementById(id);
+let snap = null;
+let clockSkew = 0;
+const seen = new Set();
+
+// --- formatting ---
+const fmt = n => {
+  if (n == null) return '–';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K';
+  return n.toLocaleString();
+};
+const ms = v => v == null ? '–' : v < 1000 ? `${v} ms` : `${(v / 1000).toFixed(1)} s`;
+const hhmm = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const hhmmss = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const dur = d => {
+  d = Math.max(0, Math.floor(d / 1000));
+  const h = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60), s = d % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
+};
+const shortModel = m => m ? m.replace(/^claude-/, '').replace(/-\d{8}$/, '') : '–';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const now = () => Date.now() + clockSkew;
+
+// --- theme toggle ---
+try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+$('theme').onclick = () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch {}
+  if (snap) drawCharts();
+};
+
+// --- column chart ---
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 2.5, 5, 10].map(s => s * p).find(c => c >= v);
+}
+
+function columnChart(el, points, key, label) {
+  const W = el.clientWidth, H = el.clientHeight;
+  const pad = { l: 34, r: 6, t: 8, b: 18 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const max = niceMax(Math.max(...points.map(p => p[key])));
+  const band = iw / points.length;
+  const bw = Math.min(24, band * 0.62);
+  const y = v => pad.t + ih - (v / max) * ih;
+
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">`;
+  for (const f of [0, 0.5, 1]) {
+    const v = max * f, yy = Math.round(y(v)) + 0.5;
+    s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${yy}" y2="${yy}" stroke="var(${f ? '--grid' : '--axis'})" stroke-width="1"/>`;
+    s += `<text x="${pad.l - 6}" y="${yy + 3}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  points.forEach((p, i) => {
+    const cx = pad.l + band * i + band / 2;
+    const v = p[key];
+    if (v > 0) {
+      const top = y(v), h = pad.t + ih - top, r = Math.min(4, h, bw / 2), x0 = cx - bw / 2, x1 = cx + bw / 2, base = pad.t + ih;
+      s += `<path d="M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z" fill="var(--series-1)"/>`;
+    }
+    const last = i === points.length - 1;
+    if (last || i % 5 === 0) {
+      s += `<text x="${cx}" y="${H - 4}" text-anchor="middle">${last ? 'now' : hhmm(p.t)}</text>`;
+    }
+    s += `<rect x="${pad.l + band * i}" y="${pad.t}" width="${band}" height="${ih}" fill="transparent" data-i="${i}"/>`;
+  });
+  s += `</svg><div class="tip"></div>`;
+  el.innerHTML = s;
+
+  const tip = el.querySelector('.tip');
+  el.querySelectorAll('rect[data-i]').forEach(r => {
+    r.addEventListener('mouseenter', () => {
+      const i = +r.dataset.i, p = points[i];
+      tip.innerHTML = `${hhmm(p.t)}${i === points.length - 1 ? ' (now)' : ''} · <b>${p[key].toLocaleString()}</b> ${label}`;
+      tip.style.left = `${pad.l + band * i + band / 2}px`;
+      tip.style.top = `${p[key] > 0 ? y(p[key]) : pad.t + ih}px`;
+      tip.style.display = 'block';
+    });
+    r.addEventListener('mouseleave', () => (tip.style.display = 'none'));
+  });
+}
+
+function drawCharts() {
+  columnChart($('c-req'), snap.minutes, 'requests', 'requests');
+  columnChart($('c-tok'), snap.minutes, 'tokens', 'tokens');
+}
+new ResizeObserver(() => snap && drawCharts()).observe($('c-req'));
+
+// --- render ---
+function statusCell(r) {
+  if (r.status == null) return `<span class="status live"><i></i>streaming</span>`;
+  const cancelled = r.note === 'client closed';
+  const cls = cancelled || r.status === 401 ? 'warn' : r.status < 400 ? 'ok' : 'err';
+  const text = r.note === 'bad secret' ? '401 bad secret' : cancelled ? 'cancelled' : r.status;
+  return `<span class="status ${cls}" title="${esc(r.note ?? '')}"><i></i>${esc(text)}</span>`;
+}
+
+function render() {
+  const t = snap.totals;
+  $('t-req').textContent = fmt(t.requests);
+  $('t-req-sub').textContent = snap.inFlight ? `${snap.inFlight} in progress` : 'idle';
+  const allIn = t.input + t.cacheRead + t.cacheWrite;
+  $('t-in').textContent = fmt(allIn);
+  $('t-in-sub').textContent = allIn ? `${Math.round(t.cacheRead / allIn * 100)}% from cache` : ' ';
+  $('t-out').textContent = fmt(t.output);
+  $('t-lat').textContent = t.latencyCount ? ms(Math.round(t.latencySum / t.latencyCount)) : '–';
+  $('t-err').textContent = fmt(t.errors);
+  $('t-err-sub').textContent = t.rejected ? `${t.rejected} rejected (bad secret)` : 'no rejected attempts';
+
+  drawCharts();
+
+  const rows = snap.recent;
+  $('feed-empty').style.display = rows.length ? 'none' : 'block';
+  $('feed').innerHTML = rows.map(r => {
+    const isNew = !seen.has(r.id);
+    seen.add(r.id);
+    const inTok = r.input + r.cacheRead + r.cacheWrite;
+    return `<tr class="${isNew ? 'new' : ''}">
+      <td class="dim">${hhmmss(r.start)}</td>
+      <td>${esc(r.ip)}</td>
+      <td class="dim" title="${esc(r.url)}">${esc(shortModel(r.model))}</td>
+      <td>${statusCell(r)}</td>
+      <td class="num">${r.ms != null ? ms(r.ms) : ms(Math.round(now() - r.start))}</td>
+      <td class="num">${inTok ? fmt(inTok) : '–'}</td>
+      <td class="num">${r.output ? fmt(r.output) : '–'}</td>
+    </tr>`;
+  }).join('');
+
+  $('clients').innerHTML = snap.clients.length
+    ? snap.clients.map(c => `<div class="row">
+        <span class="status ${now() - c.last < 120000 ? 'ok' : 'idle'}" title="${now() - c.last < 120000 ? 'active' : 'idle'}"><i></i></span>
+        <span class="grow">${esc(c.ip)}</span>
+        <span class="dim">${c.requests} req</span>
+        <span class="t">${hhmm(c.last)}</span></div>`).join('')
+    : `<div class="empty">No clients yet</div>`;
+
+  const icons = { info: '●', warn: '▲', error: '✕' };
+  $('events').innerHTML = snap.events.length
+    ? snap.events.map(e => `<div class="row">
+        <span class="ico ${e.level}" aria-label="${e.level}">${icons[e.level] ?? '●'}</span>
+        <span class="grow" title="${esc(e.text)}">${esc(e.text)}</span>
+        <span class="t">${hhmm(e.t)}</span></div>`).join('')
+    : `<div class="empty">No events yet</div>`;
+
+  tick();
+}
+
+// Countdown + uptime update every second without waiting for the server.
+function tick() {
+  if (!snap) return;
+  $('uptime').textContent = `up ${dur(now() - snap.started)}`;
+  if (snap.expiresAt) {
+    const left = snap.expiresAt - now();
+    $('t-exp').textContent = left > 0 ? dur(left) : 'expired';
+    $('t-exp-sub').textContent = left > 0 ? `renews before ${hhmm(snap.expiresAt)}` : 'renews on next request';
+  }
+}
+setInterval(tick, 1000);
+
+// --- live connection ---
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => { $('live').className = 'live on'; $('live').lastChild.textContent = 'Live'; };
+  es.onmessage = e => {
+    snap = JSON.parse(e.data);
+    clockSkew = snap.now - Date.now();
+    render();
+  };
+  es.onerror = () => { $('live').className = 'live'; $('live').lastChild.textContent = 'Relay not running'; };
+}
+connect();
+</script>
+</body>
+</html>

@@ -181,6 +181,32 @@ The Claude Code VS Code extension reads the same `~/.claude/settings.json`, so i
 
 ---
 
+## Live traffic dashboard (optional)
+
+Start the relay with `--dashboard` to open a small window that shows its traffic live:
+
+```powershell
+node relay.mjs --host 100.66.59.33 --dashboard
+```
+
+The window shows:
+
+- **Totals:** requests, input tokens (and how much came from cache), output tokens, average latency, and errors
+- **Login token:** a countdown until the PC's OAuth token renews
+- **Charts:** requests and tokens per minute over the last 15 minutes
+- **Live requests:** each request as it happens (client IP, model, status, latency, tokens), including requests still streaming
+- **Clients:** which devices have connected and when they were last seen
+- **Events:** new clients, rejected attempts (wrong secret), and token refreshes
+
+How it works:
+
+- The dashboard runs at `http://127.0.0.1:8788` and is reachable **only from the PC itself**, never from the laptop or Tailscale.
+- On Windows it opens in Edge's app mode (a standalone window with no tabs or address bar). If you close the window, reopen that URL in any browser.
+- It reads token counts from Anthropic's responses as they pass through, without changing them.
+- Stats are kept in memory and reset when the relay restarts.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -203,6 +229,8 @@ The Claude Code VS Code extension reads the same `~/.claude/settings.json`, so i
 | `CLAUDE_CREDENTIALS` | `~/.claude/.credentials.json` | Path to the PC's Claude credentials |
 | `RELAY_REFRESH_MARGIN_MS` | `120000` (2 min) | How long before expiry the relay refreshes the token |
 | `--refresh-now` | — | Force one token refresh, save it, and exit |
+| `--dashboard` | off | Start the live traffic dashboard and open its window |
+| `--dashboard-port` / `RELAY_DASHBOARD_PORT` | `8788` | Port for the dashboard (always localhost-only) |
 
 **Rotate the secret:** delete `relay.secret`, restart the relay, and update the laptop's `settings.json`.
 
