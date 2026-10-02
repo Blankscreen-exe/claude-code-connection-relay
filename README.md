@@ -207,6 +207,42 @@ How it works:
 
 ---
 
+## Switching back to normal Claude Code on the laptop
+
+The relay only changes one settings file on the laptop, so going back is easy.
+
+1. Open `~/.claude/settings.json` on the laptop and delete these three lines from the `"env"` block (or the whole `"env"` block if nothing else is in it):
+
+   ```json
+   "ANTHROPIC_BASE_URL": "http://<PC-IP>:8787",
+   "ANTHROPIC_AUTH_TOKEN": "...",
+   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+   ```
+
+   If those were the only settings in the file, you can delete the whole file.
+
+2. Restart Claude Code, run `/login`, and sign in with your account in the browser.
+
+3. Check with `/status`. It should show your account and no custom base URL.
+
+**Still going through the relay?** Check whether the variables are also set in your shell (for example in `~/.bashrc` or `~/.zshrc`):
+
+```bash
+env | grep ANTHROPIC
+```
+
+If anything shows up, remove those `export` lines and open a new terminal.
+
+**Switching to the relay again later:** put the `"env"` block back. Keeping a copy in a file like `~/.claude/relay-env.json` makes it easy to paste back in.
+
+**Fully shutting off relay access (optional, on the PC):** stop the relay with `Ctrl+C` and remove the firewall rule (Administrator PowerShell):
+
+```powershell
+Remove-NetFirewallRule -DisplayName "Claude relay"
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
