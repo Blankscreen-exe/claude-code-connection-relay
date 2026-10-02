@@ -15,6 +15,8 @@ Use Claude Code on a **laptop** with the Claude Pro/Max login of another **PC**,
 - **The laptop never sees your OAuth token.** It only holds a relay secret, and the relay swaps that for the real token.
 - **The relay refreshes the token automatically.** Shortly before the OAuth token expires, the relay gets a new one and saves it back to the PC's credentials file, so you can work remotely all day while the PC sits idle. Refreshes done by Claude Code on the PC are picked up too.
 
+![claude_relay_preview](docs/images/claude_relay_preview.png)
+
 ---
 
 ## Requirements
